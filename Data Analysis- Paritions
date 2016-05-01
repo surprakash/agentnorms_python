@@ -1,0 +1,119 @@
+import pandas as pd
+import equivalence as eq
+import csv
+import sys
+import cPickle  
+from collections import defaultdict
+sys.setrecursionlimit(40000) 
+
+#Loading the Mentions table
+cols = ['GlobalEventID','EventTimeDate', 'MentionTimeDate', 'MentionType', 'MentionSourceName', 'MentionIdentifier',
+        'SentenceID','Actor1CharOffset','Actor2CharOffset','ActionCharOffset','InRawText','Confidence','MentionDocLen',
+       'MentionDocTone','MentionDocTranslationInfo','Extras']
+men = pd.read_table('merged.csv', sep='\t',low_memory=False,header=None,names=cols,usecols=['GlobalEventID','MentionIdentifier'], chunksize=2000)
+mendf=pd.concat(chunk for chunk in men)
+
+#Loading the Events data/table
+colnames = [
+'GlobalEventID',
+'SQLDATE',
+'MonthYear',
+'Year',
+'FractionDate',
+'Actor1Code',
+'Actor1Name',
+'Actor1CountryCode',
+'Actor1KnownGroupCode',
+'Actor1EthnicCode',
+'Actor1Religion1Code',
+'Actor1Religion2Code',
+'Actor1Type1Code',
+'Actor1Type2Code',
+'Actor1Type3Code',
+'Actor2Code',
+'Actor2Name',
+'Actor2CountryCode',
+'Actor2KnownGroupCode',
+'Actor2EthnicCode',
+'Actor2Religion1Code',
+'Actor2Religion2Code',
+'Actor2Type1Code',
+'Actor2Type2Code',
+'Actor2Type3Code',
+'IsRootEvent',
+'EventCode',
+'EventBaseCode',
+'EventRootCode',
+'QuadClass',
+'GoldsteinScale',
+'NumMentions',  
+'NumSources',
+'NumArticles',
+'AvgTone',
+'Actor1Geo_Type',
+'Actor1Geo_FullName',
+'Actor1Geo_CountryCode',
+'Actor1Geo_ADM1Code',
+'Actor1Geo_Lat',
+'Actor1Geo_Long',
+'Actor1Geo_FeatureID',
+'Actor2Geo_Type',
+'Actor2Geo_FullName',
+'Actor2Geo_CountryCode',
+'Actor2Geo_ADM1Code',
+'Actor2Geo_Lat',
+'Actor2Geo_Long',
+'Actor2Geo_FeatureID',
+'ActionGeo_Type',
+'ActionGeo_FullName',
+'ActionGeo_CountryCode',
+'ActionGeo_ADM1Code',
+'ActionGeo_Lat',
+'ActionGeo_Long',
+'ActionGeo_FeatureID',
+'DATEADDED',
+'SOURCEURL']
+events=pd.read_table('mergedevents.csv', sep='\t', names=colnames,low_memory=False, usecols=['SQLDATE', 'GlobalEventID','Actor1CountryCode', 'Actor2CountryCode', 'Actor1Code','Actor2Code','EventBaseCode'], chunksize=2500)
+evendf=pd.concat(chunk for chunk in events)
+evendf 
+
+mappedmenres=mendf[mendf.GlobalEventID.isin(evendf.GlobalEventID)]
+merged=pd.merge(evendf, mappedmenres, on='GlobalEventID', how='outer')
+
+#Extracting the governmental events from the dataset
+dropnan=merged.dropna(subset=['Actor1CountryCode', 'Actor2CountryCode','Actor1Code','Actor2Code'])
+govevents=dropnan[(dropnan['Actor1Code'].str.contains('GOV')) | (dropnan['Actor2Code'].str.contains('GOV'))]
+
+equiv = eq.Equivalence()
+
+def CountryPairEvents(eventIndices): 
+'''Returns a dictionary of country pairs as actors and their respective events'''
+    
+        countrypairsdict = defaultdict(list) 
+    for index in eventIndices:
+        eventID = govevents.ix[index].GlobalEventID 
+        actor1=govevents.ix[index].Actor1CountryCode
+        actor2=govevents.ix[index].Actor2CountryCode
+        if actor1<actor2:
+            actorstuple=(actor1,actor2)
+        else:
+            actorstuple=(actor2,actor1)
+        countrypairsdict[actorstuple].append(eventID)        
+    return countrypairsdict.values()
+
+mentionIdGroups=govevents.groupby(['MentionIdentifier']).groups
+for key, eventIndexList in mentionIdGroups.iteritems():
+    if (len(eventIndexList)>1 and len(eventIndexList)<=3):
+            subgroups = CountryPairEvents(eventIndexList)
+            for subgroup in subgroups:
+                equiv.merge(*subgroup)                 
+partitions= equiv.partitions() 
+
+#Pickles the result into an external file for use
+with open('partitions.p', 'w') as ptionlol:
+  cPickle.dump(partitions, ptionlol)
+  
+#Writes to a csv file
+with open("partitions.csv", "wb") as f: #into a csv file
+    writer = csv.writer(f)
+    writer.writerows(partitions)
