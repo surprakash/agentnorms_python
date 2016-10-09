@@ -1,0 +1,52 @@
+import pandas as pd
+import pickle
+import cPickle
+with open('Partitions09Sept2016.p','rb') as f:
+    partitions = cPickle.load(f)
+    
+with open('eventsdirrootcode.p','rb') as d:
+    cameowithdir = pickle.load(d)
+
+gevents=pd.read_csv('GovEventsOneYear.csv', sep='\t',index_col=0)
+
+gevents=gevents.set_index('GlobalEventID')
+
+#Function to extract original EventIDs
+def getOriginalEventIDs(partition):
+    newpartition=[]
+    for eventID in partition:
+        if '$' in str(eventID):
+            symindex=eventID.index('$')
+            originalid=int(eventID[0:symindex])
+            newpartition.append(originalid)
+        else:
+            newpartition.append(int(eventID))
+    return newpartition
+
+#Mapping EventIDs to CameoCodes with directions
+EventRootCodes=[]
+for partition in partitions:
+    newpartition=getOriginalEventIDs(partition)
+    print newpartition
+    CameoCodesWithDir=[]
+    country1=gevents.loc[gevents.index==newpartition[0]]['Actor1CountryCode'].values
+    print country1
+    for eventID in newpartition:
+        country=gevents.loc[gevents.index==eventID]['Actor1CountryCode'].values
+        print country
+        if country==country1:
+            print 'countrysame'
+            eventrootcode=gevents.loc[gevents.index==eventID]['EventRootCode'].values[0]
+            print eventrootcode
+            rootcodewithdirection=cameowithdir[cameowithdir['Code']==(str(eventrootcode)+'F')]['InECode'].values
+            print rootcodewithdirection
+            CameoCodesWithDir.extend(rootcodewithdirection)
+        else:
+            eventrootcode=gevents.loc[gevents.index==eventID]['EventRootCode'].values
+            rootcodewithdirection=cameowithdir[cameowithdir['Code']==(str(eventrootcode)+'B')]['InECode'].values
+            CameoCodesWithDir.extend(rootcodewithdirection)
+    EventRootCodes.append(CameoCodesWithDir)
+
+import cPickle             
+with open('PartitionsOneYear-09thSept2016.p', 'w') as cameopartitions:
+  cPickle.dump(EventRootCodes, cameopartitions)
