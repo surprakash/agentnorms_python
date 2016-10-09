@@ -1,0 +1,378 @@
+"""Imports the modules and the pickled files with Cameo-Coded partitions """
+from thinkbayes import Suite
+import numpy as np
+import libplump
+import re
+from operator import mul
+import pickle
+import pandas as pd
+import itertools 
+from operator import concat
+from collections import defaultdict, namedtuple
+from priorityqueue import PriorityQueue
+from math import log
+
+
+#Loads the seq
+seq = libplump.VectorInt() #python wrapper
+with open('SMseq.p','rb') as f:
+    seqlist=pickle.load(f)
+     
+
+#Loads the trained Sequence Memoizer
+restaurant = libplump.HistogramRestaurant()
+nodeManager = libplump.SimpleNodeManager(restaurant.getFactory())
+parameters = libplump.SimpleParameters()
+numTypes = 39 #number of types of ecodes
+model = libplump.HPYPModel(seq, nodeManager, restaurant, parameters, numTypes)
+
+#Loads structure and parameters from the trained model
+serializer = libplump.Serializer("TrainedSM.dump")
+serializer.loadNodesAndPayloads(nodeManager, restaurant.getFactory())
+startIndex=len(seqlist)
+
+for item in seqlist:
+    seq.push_back(item)
+
+model = libplump.HPYPModel(seq, nodeManager, restaurant, parameters, numTypes)
+
+def Normalize(self, fraction=1.0):
+    pass
+
+def opposite_direction(testecode, startecode):
+    """
+    Takes two SM codes 
+    Returns 'True' for codes with same direction, and 'False' otherwise
+    """
+    if testecode%2!=startecode%2:
+        return True
+    else:
+        return False
+    
+def EventcodeToCameoCode(item):
+    """
+    Takes an event code with direction and maps into Cameo Code
+    item: an event code with direction  
+
+    """
+    cameocode=int()
+    cameocode=(item/2)+1
+    return cameocode
+    
+def CameoCodetoEventCode(item, direction):
+    """
+    Takes a cameo code and a direction 
+    Returns an event code with direction         
+    """
+    if direction=='F':
+        SMCode = (item-1)*2
+    elif direction == 'B':
+        SMCode = ((item-1)*2)+1
+    else:
+        raise ValueError ('Invalid Direction')
+    return SMCode
+    
+def Direction(item):
+    """
+    Takes an SM code and tests for direction
+    Returns 'F' for Forward and 'B' for Backward direction. 
+    """
+    if item%2==0:
+        return 'F'
+    else:
+        return 'B'
+    
+def DirectionOK(event, direction_constraint) :
+    """
+    Tests whether the hypothesis direction matches with the event direction
+    """
+    eventDir=''
+    if (event%2):
+        eventDir=='F'
+    else:
+        eventDir=='B'
+    if eventDir==direction_constraint:
+        return True
+    elif direction_constraint==None:
+        return True
+    else:
+        return False
+    
+def RelativeDirection(direction, relativedir):
+    """
+    Returns same direction if relative direction is 'same', else the opposite direction
+    """
+    if relative_dir=='Same':
+        return direction
+    elif relative_dir=='Opposite':
+        return 'B' if direction == 'F' else 'F'
+    else:
+        raise ValueError('Invalid realtive direction')
+
+sanction_codes=[20,21,22,23, 30,31]
+
+Prohib = namedtuple('Prohib',['ev_type'])
+"""
+    A prohibition norm 
+"""
+Prohib.__new__.__defaults__ = (None)
+
+CondProhib=namedtuple('CondProhib',['cond_ev_type','ev_type', 'relative_direction','type'])
+"""
+    A conditional prohibition norm
+"""
+CondProhib.__new__.__defaults__ = (None, None, None,'CondProhib')
+
+Oblig = namedtuple('Oblig',['ev_type'] )
+"""
+    An obligation norm 
+"""
+Oblig.__new__.__defaults__ = (None)
+
+CondOblig = namedtuple('CondOblig',['cond_ev_type','ev_type', 'relative_direction','type'])
+"""
+    A conditional obligation norm 
+"""
+CondOblig.__new__.__defaults__ = (None, None, None, 'CondOblig')
+
+
+class NormSuite(Suite):
+    """
+    NormSuite represents a set of mutually exclusive norm hypotheses, where norms can be
+    Prohib(), CondProhib(), CondOblig() or None.
+    hypotheses: a dict mapping hypotheses to their probabilities
+    UpdateSet : an overriden method from thinkbayes.Suite and updates the probability distribution and calls the LogLikelihoodUsingSanctions 
+    function to calculate the log likelihood of the data given the hypothesis
+    prob_compliance: fixed probability of the country being compliant 
+    prob_sanctioning : fixed probability of a sanctioning event 
+    
+    """
+    def __init__(self, hypotheses,prob_sanctioning=0.5, prob_compliance=0.5, name=''):
+        Suite.__init__(self, hypotheses, name)
+        self.initial_hypotheses = hypotheses 
+        self.prob_sanctioning = prob_sanctioning
+        self.prob_compliance=prob_compliance
+    
+    
+    def UpdateSet(self, dataset):
+        """Overrides UpdatesSet from thinkbayes.Suite and updates each hypothesis based on the dataset.
+
+        dataset: a collection of equivalence classes
+        """
+        for data in dataset:
+            self.UpdateOddsRatioVsNoNorm(data)
+      
+    def UpdateOddsRatioVsNoNorm(self, obs):
+        """
+        Updates each hypothesis based on the data.
+
+        obs: an equivalence class 
+
+        """
+        no_norm_log_likelihood_using_sanctions = self.LogLikelihoodUsingSanctions(obs, None)
+        for hypo in self.Values():
+            if hypo != None:
+                hypo_log_likelihood = self.LogLikelihoodUsingSanctions(obs, hypo)
+                self.Incr(hypo, (hypo_log_likelihood - no_norm_log_likelihood_using_sanctions))
+   
+        
+    def Detach_Cond(self, CondNorm):
+        """
+        Takes a Conditional Norm and returns an unconditional norm (with the condition detached)
+        """
+        if isinstance(CondNorm, CondProhib):
+            CondNorm_Ev_Type= CondNorm.ev_type
+            UnconditionalNorm = Prohib(CondNorm_Ev_Type)
+            return UnconditionalNorm
+        else:
+            CondNorm_Ev_Type= CondNorm.ev_type
+            UnconditionalNorm = Oblig(CondNorm_Ev_Type)
+            return UnconditionalNorm   
+        
+    def CondNormCounter(self, counter, conditionalnorm,hypo):
+        """
+        Takes a counter, conditional normm and hypothesis and updates the counter
+        """
+        if conditionalnorm!=None:
+            counter[conditionalnorm]+=1
+        else:
+            counter[hypo]+=1
+              
+    def LogLikelihoodUsingSanctions(self, obs, hypothesis, min_violation_ind=0, direction=None, conditional_norm=None):
+        """
+        Calculates the loglikelihood of the observed data given the hypothesis
+        obs : a partition
+        hypothesis: a hypothesis of the form Prohib(), CondProhib() or CondOblig()
+        min_violation_ind : index of obs following the index at which condition was detected
+        direction: the direction of the country governed by the norm ('F', 'B' or 'None')
+        conditional_norm: set to record the conditional norm before the original condition was detached
+        
+        """
+        if hypothesis == None:
+            """
+            This case is called when the hypothesis is null. This case calculates the likelihood of the observation in a non normative space
+            """
+            #Likelihood of the observation in non normative space: sequence of conditional probabilities from the Sequence Memoizer
+            for item in obs:
+               seq.push_back(item)
+                #Sequence of conditional probabilities from the trained Sequence Memoizer 
+            cond_probs= model.predictSequence(startIndex,len(seq), model.ABOVE)
+            log_cond_probs=map(log,cond_probs)
+            for _ in xrange(len(obs)):
+                seq.pop_back()
+            log_likelihood=reduce(add,log_cond_probs)
+            return log_likelihood
+        
+        elif isinstance(hypothesis, Prohib):
+            """
+            This case is called when the hypothesis is a Prohib type. 
+            For unconditional prohibition norms (Prohib) as well as conditional prohib norms (CondProhib) once the condition has been identified in the observation
+            """
+            #Counter to store the conditional norm that was triggered
+            self.CondNormCounter(normTriggeredCounter, conditional_norm, hypothesis)
+            length=len(obs)
+            #detecting violation indices from the country of interest 
+            violation_indices = [index+min_violation_ind for index,item in enumerate(obs[min_violation_ind:]) if EventcodeToCameoCode(item)==hypothesis.ev_type and DirectionOK(item, direction)]
+            #if no violation events are found and the Prohib norm is fulfilled
+            if not violation_indices:
+                self.CondNormCounter(normFulfilledCounter, conditional_norm, hypothesis)
+                #log_likelihood=log(self.prob_compliance)
+                for item in obs:
+                    seq.push_back(item)
+                cond_probs=model.predictSequence(startIndex,len(seq), model.ABOVE)
+                scaled_prob_list=[]
+                for _ in xrange(len(obs)):
+                    seq.pop_back()
+                index= min_violation_ind
+                for item in obs[min_violation_ind+1:]:
+                    #Scaled probability of an event from the country of interest, from all events with opposite direction + events with same direction other than the prohibited one
+                    item_direction=Direction(item)
+                    #prohibited event probability given the current context 
+                    prohib_event_prob = model.predict(startIndex, startIndex + index, CameoCodetoEventCode(hypothesis.ev_type, item_direction))
+                    scaled_prob=cond_probs[index]/(1 - prohib_event_prob)
+                    #likelihood of (country deciding to be compliant + country not deciding to be compliant) 
+                    scaled_prob_list.extend([scaled_prob])
+                    index+=1
+                likelihood = self.prob_compliance*(reduce(mul, cond_probs[:min_violation_ind+1]) * reduce(mul,scaled_prob_list,1)) + (1-self.prob_compliance) * reduce(mul, cond_probs)
+                #log_add = reduce(add, likelihood)
+                log_likelihood=log(likelihood)
+                return log_likelihood
+            else:
+                #if violation events are found and the norm is breached
+                self.CondNormCounter(normViolatedCounter, conditional_norm, hypothesis)
+                violation_sanctions=set()
+                num_violations=len(violation_indices)
+                #Segmentation of the observation based on violation indices detected
+                viol_segment_ranges = zip(violation_indices, violation_indices[1:]+[len(obs)])
+                log_prob_non_compliance=log(1-self.prob_compliance)
+                log_likelihood= num_violations* log_prob_non_compliance
+                for start,end in viol_segment_ranges:
+                    segment = obs[start:end]
+                    #store the first sanction event in the violation segment
+                    first_sanction_index=next((start+index for index,item in enumerate(segment) if (opposite_direction(item,segment[0]) and item in sanction_codes)), None)
+                    if first_sanction_index!=None:
+                        violation_sanctions.add(first_sanction_index)
+                if violation_sanctions != set():
+                    self.CondNormCounter(normViolatedSanctionedCounter, conditional_norm, hypothesis)
+                else:
+                    self.CondNormCounter(normViolatedNoSanctionCounter, conditional_norm, hypothesis)
+                for index,item in enumerate(obs):
+                    seq.push_back(item)
+                cond_probs=model.predictSequence(startIndex,len(seq), model.ABOVE)
+                for _ in xrange(len(obs)):
+                    seq.pop_back()
+                #calculate likelihood by incorporating the probability of a sanction at sanction indices
+                log_cond_probs=((log(self.prob_sanctioning) if i in violation_sanctions else log(v)) for i,v in enumerate(cond_probs))
+                log_add = reduce(add, log_cond_probs)
+                log_likelihood+=log_add 
+                return log_likelihood
+        
+        elif isinstance(hypothesis, Oblig):
+            """
+            This case is called when the hypothesis is a obligation norm type. 
+            Called only for CondOblig norms once the condition has been identified 
+            """
+            #Identify the event that fulfills the norm, if present
+            self.CondNormCounter(normTriggeredCounter, conditional_norm, hypothesis)
+            fulfillment_index=next((index for index,item in enumerate(obs[min_violation_ind:]) if EventcodeToCameoCode(item)==hypothesis.ev_type and DirectionOK(item,direction)),None)
+            for index,item in enumerate(obs):
+                seq.push_back(item)
+            cond_probs=model.predictSequence(startIndex,len(seq), model.ABOVE)
+            for _ in xrange(len(obs)):
+                seq.pop_back()
+            if not fulfillment_index:
+                #Obligation norm is violated
+                self.CondNormCounter(normViolatedCounter, conditional_norm, hypothesis)
+                violation_index=min_violation_ind
+                log_prob_non_compliance=log(1-self.prob_compliance)
+                log_likelihood= 1*log_prob_non_compliance
+                #first sanction index from the other country in the rest of the observation from the triggering index
+                violation_sanctions= [index for index,item in enumerate(obs[violation_index:]) if item in sanction_codes and not DirectionOK(item, direction)]
+                #incorporate probability of sanction for the sanction events present in the observation 
+                if not violation_sanctions:
+                    self.CondNormCounter(normViolatedNoSanctionCounter, conditional_norm, hypothesis)
+                else:
+                    self.CondNormCounter(normViolatedSanctionedCounter, conditional_norm, hypothesis)
+                log_cond_probs=((log(self.prob_sanctioning) if i in violation_sanctions else log(v)) for i,v in enumerate(cond_probs))
+                log_add = reduce(add, log_cond_probs)
+                log_likelihood+=log_add 
+                
+            else:
+                self.CondNormCounter(normFulfilledCounter, conditional_norm, hypothesis)
+                #probability of the event happening because of norm compliance or the probability of the eveent being a random choice
+                log_cond_probs=((log(self.prob_compliance + (1-self.prob_compliance)*cond_probs[i]) if i==fulfillment_index else log(v)) for i,v in enumerate(cond_probs))
+                log_add=reduce(add, log_cond_probs)
+                log_likelihood=log_add
+            return log_likelihood
+        
+        elif hasattr(hypothesis, 'cond_ev_type'):
+            """
+            This case is called when the hypothesis is a CondProhib or a CondOblig type
+            This case calls Prohib and Oblig case recursively once the condition has been identified in the observation 
+            """
+            trigger_ind= next((index for index,item in enumerate(obs) if EventcodeToCameoCode(item)==hypothesis.cond_ev_type), None)
+           # print 'Trigger Index',trigger_ind
+            if trigger_ind!=None:
+                trigger_ind_dir=Direction(obs[trigger_ind])
+                trig_direction=RelativeDirection(trigger_ind_dir,hypothesis.relative_direction)
+                #print 'Inside Cond Loop, Triggerding Index direction',trig_direction
+                return self.LogLikelihoodUsingSanctions(obs, self.Detach_Cond(hypothesis), min_violation_ind=trigger_ind+1, direction=trig_direction, conditional_norm=hypothesis)
+            else:
+                return self.LogLikelihoodUsingSanctions(obs,None)
+                #print'Condition norm not triggered'
+        else:
+            #print 'This Loop',hypothesis
+            raise ValueError('{Invalid hypothesis}'.format(hypothesis))   #Loads partitions
+with open('Partitions09thsept2016.p','rb') as d:
+    partitions = pickle.load(d)
+
+EventRootCodes= range(1,21)
+Directions=['Same','Opposite']
+unconditional_pro_norms = [ Prohib(code) for code in EventRootCodes]
+unconditional_norms=unconditional_pro_norms
+conditional_pro_norms =[CondProhib(code1, code2, direction) for code1 in EventRootCodes for code2 in EventRootCodes for direction in Directions]
+conditional_obl_norms =[CondOblig(code1, code2,direction) for code1 in EventRootCodes for code2 in EventRootCodes for direction in Directions]
+conditional_norms=conditional_pro_norms + conditional_obl_norms
+#initial_values=[log(0.05)]*1640
+#print len(initial_values)
+#hypotheses= dict(zip(poss_norms, initial_values))
+poss_norms =conditional_norms + unconditional_norms
+print 'Totoal number of norms',len(poss_norms), 'Total no of conditional norms',len(conditional_norms), 'Total no of unconditional norms',len(unconditional_norms)
+hypotheses = dict.fromkeys(poss_norms, log(0.05))
+print len(hypotheses)
+hypotheses[None] = 0 
+suite = NormSuite(hypotheses) 
+
+#Counter objects to store number of times a norm is triggered, fulfilled and violated
+
+normTriggeredCounter = Counter()
+normViolatedCounter=Counter()
+normFulfilledCounter= Counter()
+for partition in partitions:
+	#print "Norm hypotheses (with odds ratios): ", hypotheses
+
+        #print "Hypotheses: ", suite.initial_hypotheses
+        #print "Updating odds ratios after observing ", partition
+        suite.UpdateOddsRatioVsNoNorm(partition)
+        #print "The posterior odds ratios are:"
+        #suite.Print()
