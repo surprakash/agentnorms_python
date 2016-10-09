@@ -1,0 +1,54 @@
+from collections import defaultdict
+import json
+#After importing Mentions and Event Tables and adding column lable
+mentionIdGroups=men.groupby(['MentionIdentifier']).groups
+
+#Counts of EventId Mentions
+men['Frequency'] = men.groupby('GlobalEventID')['GlobalEventID'].transform('count') 
+
+#Function to create an edge between two consecutive items
+
+def eventEdges2(iterable):
+    iterator=iter(iterable)
+    try: item=iterator.next()
+    except StopIteration: return   
+    for next in iterator:
+        yield(item,next)
+        item=next
+#Function to divide event mentions into country pair events
+def CountryPairEvents(eventIndices): 
+    countrypairsdict = defaultdict(list) #a defaultdict to store eventIDs for same countrypairs
+    for ind in eventIndices:
+        #eventID = merged.ix[ind].index #mapping the eventIDs to the indices
+        actor1=merged.ix[ind].Actor1CountryCode
+        actor2=merged.ix[ind].Actor2CountryCode
+        if actor1<actor2:
+            actorstuple=(actor1,actor2)
+        else:
+            actorstuple=(actor2,actor1)
+        countrypairsdict[actorstuple].append(ind)          
+    return countrypairsdict.values()
+
+eventIdSet = set()
+with open (‘EventEdges.txt', mode='w') as resultfile:
+    manyMentionEventCopyNum=defaultdict(int)
+    for key, eventIdList in mentionIdGroups.iteritems():
+        #print eventIdList
+        if "BBC" in str(key):
+            pass
+        else:
+            subgroups = CountryPairEvents(eventidList)
+            for subgroup in subgroups:
+                for item, next in eventEdges2(subgroup):
+                    if EventMentionCounts[EventMentionCounts.index==item].MentionCounts.tolist()[0]>250:
+                        manyMentionEventCopyNum[eventid]+=1
+                        neweventid=str(item) + '$' + str(manyMentionEventCopyNum[item])
+                        edge={'src': neweventid, 'dst': next}
+                    else:
+                        edge={'src': item, 'dst': next}
+                resultfile.write("{}\n".format(json.dumps(edge)))
+                eventIdSet.update(set(subgroup))
+with open ('GovEventVertices.txt', mode='w') as resultfile2:
+    for item in eventIdSet:
+        vertex={'id': item}
+        resultfile.write("{}\n".format(json.dumps(vertex)))
