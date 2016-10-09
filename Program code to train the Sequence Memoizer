@@ -1,0 +1,82 @@
+"""Imports the modules and the pickled files with Cameo-Coded partitions """
+import numpy as np
+import libplump
+import re
+from operator import mul
+import pickle
+import pandas as pd
+import itertools 
+result = pd.read_pickle('NewPARTITIONSROOTCODES2.p') 
+with open('eventsdirrootcode.p','rb') as d:
+    cameowithdir = pickle.load(d)
+
+originalpartitions=[]
+for lists in result:
+    flattened=[val for parts in lists for val in parts]
+    originalpartitions.append(flattened)
+'''Returns predicted probabilties for each possible sequence over a threshold value'''
+
+restaurant = libplump.HistogramRestaurant()
+
+nodeManager = libplump.SimpleNodeManager(restaurant.getFactory())
+parameters = libplump.SimpleParameters()
+seq = libplump.VectorInt() #python wrapper
+numTypes = 296 #number of types of ecodes
+model = libplump.HPYPModel(seq, nodeManager, restaurant, parameters, numTypes)
+                                                                                                                                                                                                                                                                                                                                                                                                                                
+startIndex=0
+threshold = 0.0008
+
+codes=range(numTypes)
+       
+for partition in originalpartitions:
+    for item in partition:
+        seq.push_back(int(item))
+    model.computeLosses(startIndex, len(seq))
+    startIndex += len(partition)
+model.runGibbsSampler()
+
+
+recProb= {}
+def record(aTuple, probValue): 
+    recProb[aTuple]= probValue
+    print (aTuple, ":", probValue)
+
+def predictiveDistCheck(context, contextProb, predDist):
+    #finds all the sequences of length 4 that extend [c1,c2,c3]and pass the threshold
+    for i in range(len(predDist)):
+        prob=contextProb*predDist[i]
+        if (prob>threshold):
+            record((tuple(context+[i])),prob)
+    
+startIndex=len(seq) 
+for code1 in codes:
+        p1=model.predictWithFragmentation(startIndex, startIndex, code1)
+        if p1<threshold:
+            continue
+        record((code1,), p1) 
+        seq.push_back(code1)
+        for code2 in codes:
+            p2=model.predictWithFragmentation(startIndex, startIndex+1, code2)
+            assert seq[startIndex]==code1
+            if ((p1*p2)<threshold):
+                continue
+            record((code1, code1), (p1*p2)) 
+            seq.push_back(code2)
+            for code3 in codes:
+                p3=model.predictWithFragmentation(startIndex, startIndex+2, code3)
+                assert seq[startIndex+1]==code2
+                if((p1*p2*p3)<threshold):
+                    continue
+                record((code1, code2, code3), (p1*p2*p3) )
+                seq.push_back(code3)
+                predictiveDistCheck([code1,code2,code3],(p1*p2*p3), model.predictiveDistribution(startIndex, startIndex+3))
+                seq.pop_back()
+            seq.pop_back()
+        seq.pop_back()
+assert len(seq) ==startIndex    
+del model
+del nodeManager
+del restaurant
+
+sorted(recProb.items(), key=lambda x: (-x[1], x[0]))
