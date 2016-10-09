@@ -1,0 +1,17 @@
+import pandas as pd
+import pickle
+import cPickle     
+connected_comp= pd.read_pickle('GovEvents.p') 
+connected_comp=connected_comp.set_index("id")
+comp_groups=connected_comp.groupby(['component']).groups
+comp_groups
+partitions=[]
+for key, eventIndList in comp_groups.iteritems():
+    partitions.append(eventIndList)
+partitions2=[]
+for part_list in partitions:
+    part_list2=[int(x) for x in part_list]
+    partitions2.append(part_list2)
+        
+with open('C:/Users/spatnaik/SparkResults/pickledpartitions.p', 'wb') as partitionslist:
+  cPickle.dump(partitions2, partitionslist)
