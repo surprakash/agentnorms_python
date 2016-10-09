@@ -1,0 +1,13 @@
+pyspark --master local[2] --packages graphframes:graphframes:0.1.0-spark1.6 --driver-memory 2g
+from pyspark.sql import SQLContext, DataFrameReader
+sqlContext=SQLContext(sc)
+from graphframes import *
+edges=sqlContext.read.json('C:/Users/spatnaik/GoveventsEdges.txt')
+edges.printSchema #to print the dataframe schema
+
+vertices=sqlContext.read.json('C:/Users/spatnaik/GoveventsVertices.txt')
+vertices.printSchema()
+g=GraphFrame(vertices,edges)
+result=g.connectedComponents()
+pdframe=result.toPandas()
+pdframe.to_pickle('GovEventsGraphframe.p')
